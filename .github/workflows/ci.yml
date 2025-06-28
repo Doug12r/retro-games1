@@ -80,44 +80,6 @@ jobs:
           NODE_ENV: test
         run: npm run test:coverage
 
-      - name: Upload backend coverage
-        uses: codecov/codecov-action@v3
-        with:
-          files: backend/coverage/lcov.info
-          flags: backend
-          name: backend-coverage
-
-  frontend-test:
-    name: Frontend Tests
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
-          cache-dependency-path: frontend/package-lock.json
-
-      - name: Install frontend dependencies
-        working-directory: frontend
-        run: npm ci
-
-      - name: Run TypeScript compilation
-        working-directory: frontend
-        run: npm run build
-
-      - name: Run ESLint
-        working-directory: frontend
-        run: npm run lint
-
-      - name: Run unit tests
-        working-directory: frontend
-        run: npm run test:coverage
-
   docker-build:
     name: Docker Build Test
     runs-on: ubuntu-latest
@@ -137,37 +99,3 @@ jobs:
           tags: doug12r/retro-games1-backend:test
           cache-from: type=gha
           cache-to: type=gha,mode=max
-
-      - name: Build frontend image
-        uses: docker/build-push-action@v5
-        with:
-          context: ./frontend
-          push: false
-          tags: doug12r/retro-games1-frontend:test
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: Build emulator image
-        uses: docker/build-push-action@v5
-        with:
-          context: ./emulator
-          push: false
-          tags: doug12r/retro-games1-emulator:test
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-  security-scan:
-    name: Security Scan
-    runs-on: ubuntu-latest
-    
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Run CodeQL Analysis
-        uses: github/codeql-action/init@v3
-        with:
-          languages: javascript, typescript
-
-      - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@v3

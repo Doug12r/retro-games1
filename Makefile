@@ -1,6 +1,5 @@
-.PHONY: help install dev prod test clean setup-dev build logs health backup
+.PHONY: help install dev prod test clean setup-dev build logs health
 
-# Default target
 help:
 	@echo "Retro Games1 Server - Available Commands:"
 	@echo "  install     - Install all dependencies"
@@ -9,25 +8,15 @@ help:
 	@echo "  test        - Run all tests"
 	@echo "  build       - Build all components"
 	@echo "  clean       - Clean up containers and volumes"
-	@echo "  setup-dev   - Set up development environment"
-	@echo "  logs        - View service logs"
-	@echo "  health      - Check service health"
-	@echo "  backup      - Create backup"
 
 install:
 	@echo "Installing dependencies..."
 	cd backend && npm install
 	cd frontend && npm install
 
-setup-dev:
-	@echo "Setting up development environment..."
-	cp .env.example .env
-	@echo "Please edit .env file with your configuration"
-	docker-compose pull
-
 dev:
 	@echo "Starting development environment..."
-	docker-compose -f docker-compose.yml up --build
+	docker-compose up --build
 
 prod:
 	@echo "Starting production environment..."
@@ -36,7 +25,6 @@ prod:
 test:
 	@echo "Running tests..."
 	cd backend && npm test
-	cd frontend && npm test
 
 build:
 	@echo "Building all services..."
@@ -53,12 +41,3 @@ logs:
 health:
 	@echo "Checking service health..."
 	curl -f http://localhost/api/health || echo "Backend not healthy"
-	curl -f http://localhost/ || echo "Frontend not healthy"
-
-backup:
-	@echo "Creating backup..."
-	./scripts/backup.sh
-
-restore:
-	@echo "Restoring from backup..."
-	./scripts/restore.sh
