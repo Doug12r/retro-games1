@@ -1,0 +1,90 @@
+# Multi-stage build for optimal image size and security
+FROM node:18-alpine AS base
+
+# Install system dependencies for native modules and archive tools
+RUN apk add --no-cache \
+    python3 \
+    make \
+    g++ \
+    libc6-compat \
+    7zip \
+    unrar \
+    p7zip \
+    && ln -sf python3 /usr/bin/python
+
+# Set working directory
+WORKDIR /app
+
+# Copy package files
+COPY package*.json ./
+COPY prisma ./prisma/
+
+# Install dependencies
+RUN npm ci --only=production && npm cache clean --force
+
+# Generate Prisma client
+RUN npx prisma generate
+
+# Development stage
+FROM base AS development
+
+# Install all dependencies including dev
+RUN npm ci
+
+# Copy source code
+COPY . .
+
+# Build the application
+RUN npm run build
+
+# Expose port
+EXPOSE 3001
+
+# Start development server
+CMD ["npm", "run", "dev"]
+
+# Production stage
+FROM base AS production
+
+# Create non-root user for security
+RUN addgroup -g 1001 -S nodejs && \
+    adduser -S nodejs -u 1001
+
+# Copy built application
+COPY --from=development --chown=nodejs:nodejs /app/dist ./dist
+COPY --from=development --chown=nodejs:nodejs /app/package*.json ./
+COPY --from=development --chown=nodejs:nodejs /app/prisma ./prisma/
+
+# Create necessary directories
+RUN mkdir -p uploads roms media bios temp logs reports && \
+    chown -R nodejs:nodejs uploads roms media bios temp logs reports
+
+# Create health check script
+RUN echo '#!/bin/sh\ncurl -f http://localhost:3001/api/health || exit 1' > /usr/local/bin/health-check && \
+    chmod +x /usr/local/bin/health-check
+
+# Add curl for health checks
+RUN apk add --no-cache curl
+
+# Switch to non-root user
+USER nodejs
+
+# Set environment variables
+ENV NODE_ENV=production
+ENV PORT=3001
+ENV HOST=0.0.0.0
+
+# Expose port
+EXPOSE 3001
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD /usr/local/bin/health-check
+
+# Start the application
+CMD ["npm", "start"]
+
+# Labels for better organization
+LABEL maintainer="RetroGame Team"
+LABEL version="1.0.0"
+LABEL description="Enterprise-grade backend for retro game ROM management"

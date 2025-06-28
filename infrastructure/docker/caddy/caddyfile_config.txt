@@ -1,0 +1,568 @@
+# ==============================================================================
+# ENTERPRISE CADDYFILE CONFIGURATION
+# Production-ready reverse proxy with automatic HTTPS, security, and monitoring
+# ==============================================================================
+
+{
+	# Global configuration block
+	admin off
+	auto_https on
+	email {$ADMIN_EMAIL:admin@localhost}
+	
+	# Enable HTTP/3 (QUIC)
+	servers {
+		protocol {
+			experimental_http3
+		}
+	}
+	
+	# Security configuration
+	security {
+		local_certs
+	}
+	
+	# Default security headers for all sites
+	header /* {
+		# Security headers
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		X-XSS-Protection "1; mode=block"
+		Referrer-Policy strict-origin-when-cross-origin
+		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()"
+		
+		# HSTS with preload
+		Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+		
+		# Content Security Policy
+		Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: data:; style-src 'self' 'unsafe-inline' fonts.googleapis.com; img-src 'self' data: blob: https:; media-src 'self' blob: data:; worker-src 'self' blob:; connect-src 'self' ws: wss:; font-src 'self' data: fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'"
+		
+		# Remove server identification
+		-Server
+	}
+	
+	# Rate limiting zones
+	rate_limit_zone dynamic_zone {
+		key {remote_addr}
+	}
+	
+	rate_limit_zone api_zone {
+		key {remote_addr}
+	}
+	
+	rate_limit_zone upload_zone {
+		key {remote_addr}
+	}
+}
+
+# ==============================================================================
+# MAIN APPLICATION SITE
+# ==============================================================================
+{$DOMAIN:localhost} {
+	# Root site configuration
+	
+	# Enable compression
+	encode {
+		gzip 6
+		zstd
+		minimum_length 1024
+	}
+	
+	# Rate limiting for general traffic
+	rate_limit {
+		zone dynamic_zone {
+			events 200
+			window 1m
+		}
+	}
+	
+	# Static file caching and optimization
+	@static {
+		path *.js *.css *.png *.jpg *.jpeg *.gif *.webp *.svg *.ico *.woff *.woff2 *.ttf *.eot *.map
+	}
+	
+	handle @static {
+		header Cache-Control "public, max-age=31536000, immutable"
+		header Vary "Accept-Encoding"
+		
+		# Enable Brotli compression for static assets
+		encode {
+			gzip 9
+			zstd
+		}
+		
+		reverse_proxy frontend:3000 {
+			header_up Host {host}
+			header_up X-Real-IP {remote_addr}
+			header_up X-Forwarded-For {remote_addr}
+			header_up X-Forwarded-Proto {scheme}
+			header_up X-Forwarded-Port {server_port}
+		}
+	}
+	
+	# API endpoints with enhanced rate limiting
+	handle /api/* {
+		# Stricter rate limiting for API
+		rate_limit {
+			zone api_zone {
+				events 100
+				window 1m
+			}
+		}
+		
+		# CORS headers for API
+		header {
+			Access-Control-Allow-Origin "{$FRONTEND_URL:*}"
+			Access-Control-Allow-Methods "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+			Access-Control-Allow-Headers "Authorization, Content-Type, X-Requested-With"
+			Access-Control-Allow-Credentials true
+			Access-Control-Max-Age 86400
+		}
+		
+		# Handle preflight requests
+		@options method OPTIONS
+		respond @options 204
+		
+		reverse_proxy backend:8080 {
+			header_up Host {host}
+			header_up X-Real-IP {remote_addr}
+			header_up X-Forwarded-For {remote_addr}
+			header_up X-Forwarded-Proto {scheme}
+			header_up X-Forwarded-Port {server_port}
+			
+			# Load balancing and health checks
+			health_uri /api/health
+			health_interval 30s
+			health_timeout 10s
+			health_status 2xx
+			
+			# Circuit breaker
+			fail_duration 30s
+			max_fails 3
+			unhealthy_latency 10s
+			
+			# Connection pooling
+			flush_interval -1
+		}
+	}
+	
+	# Upload endpoints with special handling
+	handle /api/upload* {
+		# Very strict rate limiting for uploads
+		rate_limit {
+			zone upload_zone {
+				events 10
+				window 5m
+			}
+		}
+		
+		# Increase timeouts for large uploads
+		reverse_proxy backend:8080 {
+			header_up Host {host}
+			header_up X-Real-IP {remote_addr}
+			header_up X-Forwarded-For {remote_addr}
+			header_up X-Forwarded-Proto {scheme}
+			
+			# Extended timeouts for uploads
+			timeout 3600s
+			dial_timeout 30s
+			read_timeout 3600s
+			write_timeout 3600s
+			
+			# Disable buffering for streaming uploads
+			flush_interval -1
+			transport http {
+				read_buffer 8192
+				write_buffer 8192
+			}
+		}
+	}
+	
+	# WebSocket connections for real-time updates
+	handle /ws* {
+		reverse_proxy backend:8080 {
+			header_up Connection {>Connection}
+			header_up Upgrade {>Upgrade}
+			header_up Host {host}
+			header_up X-Real-IP {remote_addr}
+			header_up X-Forwarded-For {remote_addr}
+			header_up X-Forwarded-Proto {scheme}
+		}
+	}
+	
+	# VNC streaming for emulator access
+	handle /vnc* {
+		reverse_proxy emulator-service:5900 {
+			header_up Host {host}
+			header_up X-Real-IP {remote_addr}
+			header_up X-Forwarded-For {remote_addr}
+			header_up X-Forwarded-Proto {scheme}
+			
+			# WebSocket support for VNC
+			header_up Connection {>Connection}
+			header_up Upgrade {>Upgrade}
+		}
+	}
+	
+	# Health check endpoint
+	handle /health {
+		respond "OK - Retro Game Server" 200
+	}
+	
+	# Metrics endpoint (protected)
+	handle /metrics {
+		# IP whitelist for metrics (internal monitoring only)
+		@internal_networks {
+			remote_ip 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 127.0.0.1
+		}
+		
+		handle @internal_networks {
+			reverse_proxy backend:8080 {
+				to /api/metrics
+			}
+		}
+		
+		respond "Forbidden" 403
+	}
+	
+	# Frontend application (catch-all)
+	handle /* {
+		# Cache policy for HTML files
+		@html path *.html /
+		header @html Cache-Control "no-cache, no-store, must-revalidate"
+		header @html Pragma "no-cache"
+		header @html Expires "0"
+		
+		reverse_proxy frontend:3000 {
+			header_up Host {host}
+			header_up X-Real-IP {remote_addr}
+			header_up X-Forwarded-For {remote_addr}
+			header_up X-Forwarded-Proto {scheme}
+			
+			# Health checks for frontend
+			health_uri /health
+			health_interval 30s
+			health_timeout 10s
+		}
+	}
+	
+	# Custom error pages
+	handle_errors {
+		@5xx expression {http.error.status_code} >= 500
+		@4xx expression {http.error.status_code} >= 400 && {http.error.status_code} < 500
+		@404 expression {http.error.status_code} == 404
+		
+		handle @5xx {
+			rewrite * /errors/5xx.html
+			file_server {
+				root /var/www/errors
+			}
+		}
+		
+		handle @404 {
+			rewrite * /errors/404.html
+			file_server {
+				root /var/www/errors
+			}
+		}
+		
+		handle @4xx {
+			respond "Bad Request" {http.error.status_code}
+		}
+	}
+	
+	# Access logging with structured format
+	log {
+		output file /var/log/caddy/access.log {
+			roll_size 100MB
+			roll_keep 10
+			roll_keep_for 720h
+		}
+		format json {
+			time_format "iso8601"
+			message_key "msg"
+			level_key "level"
+			time_key "timestamp"
+			caller_key "caller"
+			stacktrace_key "stacktrace"
+			line_ending "\n"
+			custom_fields {
+				host {host}
+				remote_addr {remote_addr}
+				method {method}
+				uri {uri}
+				proto {proto}
+				status {status}
+				size {size}
+				duration {duration}
+				user_agent {>User-Agent}
+				referer {>Referer}
+				request_id {>X-Request-ID}
+			}
+		}
+		level INFO
+	}
+	
+	# Performance optimizations
+	header {
+		# Enable keep-alive
+		Connection "keep-alive"
+		
+		# Browser hints
+		Link "</static/css/main.css>; rel=preload; as=style"
+		Link "</static/js/main.js>; rel=preload; as=script"
+	}
+}
+
+# ==============================================================================
+# MONITORING AND ADMIN SUBDOMAIN
+# ==============================================================================
+admin.{$DOMAIN:localhost} {
+	# Admin interface for monitoring and management
+	
+	# Basic authentication for admin access
+	basicauth * {
+		admin {$GRAFANA_PASSWORD_HASH}
+	}
+	
+	# Rate limiting for admin interface
+	rate_limit {
+		zone dynamic_zone {
+			events 50
+			window 1m
+		}
+	}
+	
+	# Grafana monitoring dashboard
+	handle /monitoring* {
+		uri strip_prefix /monitoring
+		
+		reverse_proxy grafana:3000 {
+			header_up Host {host}
+			header_up X-Real-IP {remote_addr}
+			header_up X-Forwarded-For {remote_addr}
+			header_up X-Forwarded-Proto {scheme}
+			
+			# WebSocket support for Grafana
+			header_up Connection {>Connection}
+			header_up Upgrade {>Upgrade}
+		}
+	}
+	
+	# Prometheus metrics
+	handle /prometheus* {
+		uri strip_prefix /prometheus
+		
+		reverse_proxy prometheus:9090 {
+			header_up Host {host}
+			header_up X-Real-IP {remote_addr}
+		}
+	}
+	
+	# AlertManager
+	handle /alerts* {
+		uri strip_prefix /alerts
+		
+		reverse_proxy alertmanager:9093 {
+			header_up Host {host}
+			header_up X-Real-IP {remote_addr}
+		}
+	}
+	
+	# Kibana logs
+	handle /logs* {
+		uri strip_prefix /logs
+		
+		reverse_proxy kibana:5601 {
+			header_up Host {host}
+			header_up X-Real-IP {remote_addr}
+		}
+	}
+	
+	# System status dashboard
+	handle /status {
+		respond `
+		<!DOCTYPE html>
+		<html>
+		<head>
+			<title>RetroGame Server Status</title>
+			<style>
+				body { font-family: Arial, sans-serif; margin: 40px; }
+				.status { padding: 20px; margin: 10px 0; border-radius: 5px; }
+				.healthy { background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+				.warning { background-color: #fff3cd; color: #856404; border: 1px solid #ffeaa7; }
+				.critical { background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+				h1 { color: #333; }
+				.links { margin-top: 30px; }
+				.links a { 
+					display: inline-block; 
+					margin: 10px 15px 10px 0; 
+					padding: 10px 20px; 
+					background-color: #007bff; 
+					color: white; 
+					text-decoration: none; 
+					border-radius: 5px; 
+				}
+				.links a:hover { background-color: #0056b3; }
+			</style>
+		</head>
+		<body>
+			<h1>🎮 RetroGame Server Status</h1>
+			<div class="status healthy">✅ System Status: Operational</div>
+			<div class="status healthy">✅ Caddy Reverse Proxy: Running</div>
+			<div class="status healthy">✅ SSL/TLS: Active</div>
+			<div class="status healthy">✅ HTTP/3: Enabled</div>
+			
+			<div class="links">
+				<h3>🔧 Admin Tools</h3>
+				<a href="/monitoring/">📊 Grafana Dashboard</a>
+				<a href="/prometheus/">📈 Prometheus Metrics</a>
+				<a href="/alerts/">🚨 Alert Manager</a>
+				<a href="/logs/">📝 Kibana Logs</a>
+			</div>
+			
+			<div class="links">
+				<h3>📊 System Information</h3>
+				<p><strong>Server Time:</strong> {time}</p>
+				<p><strong>Version:</strong> v1.0.0</p>
+				<p><strong>Environment:</strong> Production</p>
+			</div>
+		</body>
+		</html>
+		` 200 {
+			Content-Type "text/html; charset=utf-8"
+		}
+	}
+	
+	# Default admin page
+	handle {
+		redir /status 302
+	}
+	
+	# Admin access logging
+	log {
+		output file /var/log/caddy/admin.log {
+			roll_size 50MB
+			roll_keep 5
+			roll_keep_for 168h
+		}
+		format json
+		level INFO
+	}
+}
+
+# ==============================================================================
+# API SUBDOMAIN (Optional)
+# ==============================================================================
+api.{$DOMAIN:localhost} {
+	# Dedicated API subdomain for better organization
+	
+	# CORS headers
+	header {
+		Access-Control-Allow-Origin "*"
+		Access-Control-Allow-Methods "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+		Access-Control-Allow-Headers "Authorization, Content-Type, X-Requested-With"
+		Access-Control-Max-Age 86400
+	}
+	
+	# Handle preflight requests
+	@options method OPTIONS
+	respond @options 204
+	
+	# Rate limiting for API subdomain
+	rate_limit {
+		zone api_zone {
+			events 500
+			window 1m
+		}
+	}
+	
+	# Forward all requests to backend
+	reverse_proxy backend:8080 {
+		header_up Host {host}
+		header_up X-Real-IP {remote_addr}
+		header_up X-Forwarded-For {remote_addr}
+		header_up X-Forwarded-Proto {scheme}
+		
+		health_uri /api/health
+		health_interval 30s
+		health_timeout 10s
+	}
+	
+	# API access logging
+	log {
+		output file /var/log/caddy/api.log {
+			roll_size 100MB
+			roll_keep 7
+			roll_keep_for 168h
+		}
+		format json
+		level INFO
+	}
+}
+
+# ==============================================================================
+# DEVELOPMENT SUBDOMAIN (Optional - for staging/testing)
+# ==============================================================================
+dev.{$DOMAIN:localhost} {
+	# Development environment access
+	
+	# IP restriction for development access
+	@dev_access {
+		remote_ip 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 127.0.0.1
+	}
+	
+	handle @dev_access {
+		# Allow development tools and debugging
+		header {
+			X-Debug-Mode "enabled"
+			Cache-Control "no-cache, no-store, must-revalidate"
+		}
+		
+		reverse_proxy frontend:3000 {
+			header_up Host {host}
+			header_up X-Real-IP {remote_addr}
+			header_up X-Forwarded-For {remote_addr}
+			header_up X-Forwarded-Proto {scheme}
+		}
+	}
+	
+	# Deny external access to development environment
+	respond "Access Denied - Development Environment" 403
+}
+
+# ==============================================================================
+# CATCH-ALL AND REDIRECTS
+# ==============================================================================
+
+# Redirect www to non-www
+www.{$DOMAIN:localhost} {
+	redir https://{$DOMAIN:localhost}{uri} permanent
+}
+
+# Redirect HTTP to HTTPS for custom domains
+http://{$DOMAIN:localhost} {
+	redir https://{$DOMAIN:localhost}{uri} permanent
+}
+
+# Global error handling
+(error_handling) {
+	handle_errors {
+		@5xx expression {http.error.status_code} >= 500
+		@4xx expression {http.error.status_code} >= 400
+		
+		handle @5xx {
+			respond "Service temporarily unavailable. Please try again later." 503 {
+				Content-Type "text/plain; charset=utf-8"
+			}
+		}
+		
+		handle @4xx {
+			respond "Resource not found or access denied." 404 {
+				Content-Type "text/plain; charset=utf-8"
+			}
+		}
+	}
+}
+
+# Import error handling for all sites
+import error_handling

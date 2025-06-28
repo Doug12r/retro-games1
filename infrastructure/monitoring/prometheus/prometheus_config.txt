@@ -1,0 +1,357 @@
+# ==============================================================================
+# PROMETHEUS CONFIGURATION
+# Production-ready monitoring setup for RetroGame Server
+# ==============================================================================
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  scrape_timeout: 10s
+  external_labels:
+    monitor: 'retrogame-monitor'
+    environment: 'production'
+
+# Load and evaluate rules
+rule_files:
+  - "alert_rules.yml"
+  - "recording_rules.yml"
+
+# Alertmanager configuration
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+          - alertmanager:9093
+      timeout: 10s
+      api_version: v2
+
+# Scrape configuration
+scrape_configs:
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+    scrape_interval: 30s
+    metrics_path: '/metrics'
+
+  # Node Exporter for system metrics
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets: ['node-exporter:9100']
+    scrape_interval: 15s
+    metrics_path: '/metrics'
+
+  # cAdvisor for container metrics
+  - job_name: 'cadvisor'
+    static_configs:
+      - targets: ['cadvisor:8080']
+    scrape_interval: 15s
+    metrics_path: '/metrics'
+
+  # Caddy reverse proxy metrics
+  - job_name: 'caddy'
+    static_configs:
+      - targets: ['caddy:2019']
+    scrape_interval: 30s
+    metrics_path: '/metrics'
+
+  # RetroGame backend API metrics
+  - job_name: 'retrogame-backend'
+    static_configs:
+      - targets: ['backend:9464']
+    scrape_interval: 15s
+    metrics_path: '/metrics'
+    scrape_timeout: 10s
+
+  # PostgreSQL database metrics
+  - job_name: 'postgres'
+    static_configs:
+      - targets: ['postgres-exporter:9187']
+    scrape_interval: 30s
+    metrics_path: '/metrics'
+
+  # Redis cache metrics
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['redis-exporter:9121']
+    scrape_interval: 30s
+    metrics_path: '/metrics'
+
+  # Blackbox monitoring for endpoint health
+  - job_name: 'blackbox-http'
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    static_configs:
+      - targets:
+        - http://frontend:3000/health
+        - http://backend:8080/api/health
+        - https://localhost/health
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115
+
+  # Alertmanager metrics
+  - job_name: 'alertmanager'
+    static_configs:
+      - targets: ['alertmanager:9093']
+    scrape_interval: 30s
+
+  # Grafana metrics
+  - job_name: 'grafana'
+    static_configs:
+      - targets: ['grafana:3000']
+    scrape_interval: 30s
+    metrics_path: '/metrics'
+
+# Remote write configuration (for long-term storage)
+# remote_write:
+#   - url: "https://prometheus-remote-write-endpoint/api/v1/write"
+#     remote_timeout: 30s
+#     queue_config:
+#       capacity: 10000
+#       max_samples_per_send: 1000
+#       batch_send_deadline: 5s
+#       min_shards: 1
+#       max_shards: 200
+
+# Storage configuration
+storage:
+  tsdb:
+    path: /prometheus
+    retention.time: 15d
+    retention.size: 10GB
+    wal-compression: true
+
+---
+# ==============================================================================
+# ALERT RULES
+# Critical alerts for production monitoring
+# ==============================================================================
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: retrogame-alerts
+spec:
+  groups:
+  - name: infrastructure.rules
+    interval: 30s
+    rules:
+    # Instance down alert
+    - alert: InstanceDown
+      expr: up == 0
+      for: 5m
+      labels:
+        severity: critical
+      annotations:
+        summary: "Instance {{ $labels.instance }} down"
+        description: "{{ $labels.instance }} of job {{ $labels.job }} has been down for more than 5 minutes."
+
+    # High CPU usage
+    - alert: HighCPUUsage
+      expr: 100 - (avg by(instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 80
+      for: 10m
+      labels:
+        severity: warning
+      annotations:
+        summary: "High CPU usage on {{ $labels.instance }}"
+        description: "CPU usage is above 80% for more than 10 minutes on {{ $labels.instance }}"
+
+    # High memory usage
+    - alert: HighMemoryUsage
+      expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 90
+      for: 5m
+      labels:
+        severity: critical
+      annotations:
+        summary: "High memory usage on {{ $labels.instance }}"
+        description: "Memory usage is above 90% for more than 5 minutes on {{ $labels.instance }}"
+
+    # High disk usage
+    - alert: HighDiskUsage
+      expr: (1 - (node_filesystem_avail_bytes{fstype!="tmpfs"} / node_filesystem_size_bytes{fstype!="tmpfs"})) * 100 > 85
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "High disk usage on {{ $labels.instance }}"
+        description: "Disk usage is above 85% on mount {{ $labels.mountpoint }} ({{ $labels.instance }})"
+
+    # Disk will fill in 4 hours
+    - alert: DiskWillFillSoon
+      expr: predict_linear(node_filesystem_avail_bytes{fstype!="tmpfs"}[1h], 4*3600) < 0
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "Disk will fill soon on {{ $labels.instance }}"
+        description: "Disk {{ $labels.mountpoint }} will fill in approximately 4 hours on {{ $labels.instance }}"
+
+  - name: application.rules
+    interval: 30s
+    rules:
+    # Backend API response time
+    - alert: HighAPIResponseTime
+      expr: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket{job="retrogame-backend"}[5m])) > 1
+      for: 10m
+      labels:
+        severity: warning
+      annotations:
+        summary: "High API response time"
+        description: "95th percentile response time is above 1 second for more than 10 minutes"
+
+    # High error rate
+    - alert: HighErrorRate
+      expr: rate(http_requests_total{status=~"5.."}[5m]) / rate(http_requests_total[5m]) * 100 > 5
+      for: 5m
+      labels:
+        severity: critical
+      annotations:
+        summary: "High error rate detected"
+        description: "Error rate is above 5% for more than 5 minutes"
+
+    # Database connection issues
+    - alert: DatabaseConnectionIssues
+      expr: pg_up == 0
+      for: 2m
+      labels:
+        severity: critical
+      annotations:
+        summary: "Database connection issues"
+        description: "PostgreSQL database is not responding for more than 2 minutes"
+
+    # Redis connection issues
+    - alert: RedisConnectionIssues
+      expr: redis_up == 0
+      for: 2m
+      labels:
+        severity: critical
+      annotations:
+        summary: "Redis connection issues"
+        description: "Redis cache is not responding for more than 2 minutes"
+
+    # High number of active connections to database
+    - alert: HighDatabaseConnections
+      expr: pg_stat_activity_count > 80
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "High number of database connections"
+        description: "Number of active database connections is above 80 for more than 5 minutes"
+
+  - name: docker.rules
+    interval: 30s
+    rules:
+    # Container down
+    - alert: ContainerDown
+      expr: absent(container_last_seen{name=~".+"})
+      for: 5m
+      labels:
+        severity: critical
+      annotations:
+        summary: "Container {{ $labels.name }} is down"
+        description: "Container {{ $labels.name }} has been down for more than 5 minutes"
+
+    # High container CPU usage
+    - alert: ContainerHighCPU
+      expr: (rate(container_cpu_usage_seconds_total{name!=""}[5m]) * 100) > 80
+      for: 10m
+      labels:
+        severity: warning
+      annotations:
+        summary: "High CPU usage in container {{ $labels.name }}"
+        description: "Container {{ $labels.name }} CPU usage is above 80% for more than 10 minutes"
+
+    # High container memory usage
+    - alert: ContainerHighMemory
+      expr: (container_memory_usage_bytes{name!=""} / container_spec_memory_limit_bytes{name!=""}) * 100 > 90
+      for: 5m
+      labels:
+        severity: critical
+      annotations:
+        summary: "High memory usage in container {{ $labels.name }}"
+        description: "Container {{ $labels.name }} memory usage is above 90% for more than 5 minutes"
+
+  - name: security.rules
+    interval: 60s
+    rules:
+    # Multiple failed authentication attempts
+    - alert: MultipleFailedLogins
+      expr: increase(node_auth_failed_total[10m]) > 5
+      for: 0m
+      labels:
+        severity: warning
+      annotations:
+        summary: "Multiple failed login attempts detected"
+        description: "{{ $value }} failed login attempts detected in the last 10 minutes on {{ $labels.instance }}"
+
+    # Unusual network traffic
+    - alert: HighNetworkTraffic
+      expr: rate(node_network_receive_bytes_total[5m]) > 100000000  # 100MB/s
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "High network traffic detected"
+        description: "High inbound network traffic detected on {{ $labels.instance }}: {{ $value }} bytes/sec"
+
+---
+# ==============================================================================
+# RECORDING RULES
+# Pre-computed metrics for better performance
+# ==============================================================================
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: retrogame-recording-rules
+spec:
+  groups:
+  - name: cpu.rules
+    interval: 30s
+    rules:
+    - record: instance:node_cpu_utilisation:rate5m
+      expr: 1 - avg(rate(node_cpu_seconds_total{mode="idle"}[5m])) by (instance)
+    
+    - record: instance:node_load1_per_cpu:ratio
+      expr: node_load1 / count(node_cpu_seconds_total{mode="idle"}) by (instance)
+
+  - name: memory.rules
+    interval: 30s
+    rules:
+    - record: instance:node_memory_utilisation:ratio
+      expr: 1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes
+
+  - name: disk.rules
+    interval: 30s
+    rules:
+    - record: instance:node_disk_utilisation:ratio
+      expr: 1 - node_filesystem_avail_bytes{fstype!="tmpfs"} / node_filesystem_size_bytes{fstype!="tmpfs"}
+
+  - name: network.rules
+    interval: 30s
+    rules:
+    - record: instance:node_network_receive_bytes:rate5m
+      expr: rate(node_network_receive_bytes_total[5m])
+    
+    - record: instance:node_network_transmit_bytes:rate5m
+      expr: rate(node_network_transmit_bytes_total[5m])
+
+  - name: application.rules
+    interval: 30s
+    rules:
+    - record: retrogame:http_request_rate5m
+      expr: rate(http_requests_total{job="retrogame-backend"}[5m])
+    
+    - record: retrogame:http_error_rate5m
+      expr: rate(http_requests_total{job="retrogame-backend", status=~"5.."}[5m])
+    
+    - record: retrogame:http_response_time_95th
+      expr: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket{job="retrogame-backend"}[5m]))
+    
+    - record: retrogame:http_response_time_99th
+      expr: histogram_quantile(0.99, rate(http_request_duration_seconds_bucket{job="retrogame-backend"}[5m]))

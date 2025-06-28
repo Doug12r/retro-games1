@@ -1,0 +1,1004 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": "-- Grafana --",
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "gnetId": null,
+  "graphTooltip": 0,
+  "id": null,
+  "title": "RetroGame Server - Infrastructure Overview",
+  "tags": ["retrogame", "infrastructure", "monitoring"],
+  "style": "dark",
+  "timezone": "",
+  "panels": [
+    {
+      "id": 1,
+      "title": "System Overview",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "up{job=\"node-exporter\"}",
+          "refId": "A",
+          "legendFormat": "System Up"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [],
+          "thresholds": {
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        }
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "values": false,
+          "calcs": ["lastNotNull"],
+          "fields": ""
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "id": 2,
+      "title": "CPU Usage",
+      "type": "gauge",
+      "targets": [
+        {
+          "expr": "100 - (avg by(instance) (rate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100)",
+          "refId": "A",
+          "legendFormat": "CPU Usage %"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "max": 100,
+          "unit": "percent",
+          "thresholds": {
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 70
+              },
+              {
+                "color": "red",
+                "value": 90
+              }
+            ]
+          }
+        }
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": ["lastNotNull"],
+          "fields": ""
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "center"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 6,
+        "y": 0
+      }
+    },
+    {
+      "id": 3,
+      "title": "Memory Usage",
+      "type": "gauge",
+      "targets": [
+        {
+          "expr": "(1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100",
+          "refId": "A",
+          "legendFormat": "Memory Usage %"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "max": 100,
+          "unit": "percent",
+          "thresholds": {
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 80
+              },
+              {
+                "color": "red",
+                "value": 95
+              }
+            ]
+          }
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 12,
+        "y": 0
+      }
+    },
+    {
+      "id": 4,
+      "title": "Disk Usage",
+      "type": "gauge",
+      "targets": [
+        {
+          "expr": "(1 - (node_filesystem_avail_bytes{fstype!=\"tmpfs\"} / node_filesystem_size_bytes{fstype!=\"tmpfs\"})) * 100",
+          "refId": "A",
+          "legendFormat": "Disk Usage %"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "max": 100,
+          "unit": "percent",
+          "thresholds": {
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 80
+              },
+              {
+                "color": "red",
+                "value": 90
+              }
+            ]
+          }
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 18,
+        "y": 0
+      }
+    },
+    {
+      "id": 5,
+      "title": "Container Status",
+      "type": "table",
+      "targets": [
+        {
+          "expr": "container_last_seen{name=~\".+\"}",
+          "refId": "A",
+          "legendFormat": "{{name}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "displayMode": "auto"
+          },
+          "mappings": [],
+          "thresholds": {
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        }
+      },
+      "options": {
+        "showHeader": true
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      }
+    },
+    {
+      "id": 6,
+      "title": "HTTP Request Rate",
+      "type": "graph",
+      "targets": [
+        {
+          "expr": "rate(http_requests_total[5m])",
+          "refId": "A",
+          "legendFormat": "{{method}} {{status}}"
+        }
+      ],
+      "yAxes": [
+        {
+          "label": "Requests/sec",
+          "min": 0
+        },
+        {
+          "show": false
+        }
+      ],
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      }
+    },
+    {
+      "id": 7,
+      "title": "HTTP Response Time",
+      "type": "graph",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m]))",
+          "refId": "A",
+          "legendFormat": "95th percentile"
+        },
+        {
+          "expr": "histogram_quantile(0.50, rate(http_request_duration_seconds_bucket[5m]))",
+          "refId": "B",
+          "legendFormat": "50th percentile"
+        }
+      ],
+      "yAxes": [
+        {
+          "label": "Seconds",
+          "min": 0
+        },
+        {
+          "show": false
+        }
+      ],
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 17
+      }
+    },
+    {
+      "id": 8,
+      "title": "Database Connections",
+      "type": "graph",
+      "targets": [
+        {
+          "expr": "pg_stat_activity_count",
+          "refId": "A",
+          "legendFormat": "Active Connections"
+        }
+      ],
+      "yAxes": [
+        {
+          "label": "Connections",
+          "min": 0
+        },
+        {
+          "show": false
+        }
+      ],
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 17
+      }
+    },
+    {
+      "id": 9,
+      "title": "Network I/O",
+      "type": "graph",
+      "targets": [
+        {
+          "expr": "rate(node_network_receive_bytes_total[5m])",
+          "refId": "A",
+          "legendFormat": "Receive {{device}}"
+        },
+        {
+          "expr": "rate(node_network_transmit_bytes_total[5m])",
+          "refId": "B",
+          "legendFormat": "Transmit {{device}}"
+        }
+      ],
+      "yAxes": [
+        {
+          "label": "Bytes/sec",
+          "min": 0
+        },
+        {
+          "show": false
+        }
+      ],
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 26
+      }
+    }
+  ],
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "templating": {
+    "list": []
+  },
+  "version": 1
+}
+
+---
+
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "gnetId": null,
+  "graphTooltip": 0,
+  "id": null,
+  "title": "RetroGame Server - Application Metrics",
+  "tags": ["retrogame", "application", "performance"],
+  "style": "dark",
+  "timezone": "",
+  "panels": [
+    {
+      "id": 1,
+      "title": "Upload Success Rate",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "rate(http_requests_total{uri=~\"/api/upload.*\", status=~\"2..\"}[5m]) / rate(http_requests_total{uri=~\"/api/upload.*\"}[5m]) * 100",
+          "refId": "A",
+          "legendFormat": "Success Rate"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "thresholds": {
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 95
+              },
+              {
+                "color": "green",
+                "value": 99
+              }
+            ]
+          }
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "id": 2,
+      "title": "Active Uploads",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "retrogame_active_uploads",
+          "refId": "A",
+          "legendFormat": "Active Uploads"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 5
+              },
+              {
+                "color": "red",
+                "value": 10
+              }
+            ]
+          }
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 6,
+        "y": 0
+      }
+    },
+    {
+      "id": 3,
+      "title": "ROM Collection Size",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "retrogame_rom_collection_size_bytes",
+          "refId": "A",
+          "legendFormat": "ROM Collection"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 12,
+        "y": 0
+      }
+    },
+    {
+      "id": 4,
+      "title": "Total Games",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "retrogame_total_games",
+          "refId": "A",
+          "legendFormat": "Total Games"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 18,
+        "y": 0
+      }
+    },
+    {
+      "id": 5,
+      "title": "Upload Throughput",
+      "type": "graph",
+      "targets": [
+        {
+          "expr": "rate(retrogame_upload_bytes_total[5m])",
+          "refId": "A",
+          "legendFormat": "Upload Rate"
+        }
+      ],
+      "yAxes": [
+        {
+          "label": "Bytes/sec",
+          "min": 0
+        },
+        {
+          "show": false
+        }
+      ],
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      }
+    },
+    {
+      "id": 6,
+      "title": "API Endpoints Performance",
+      "type": "graph",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, rate(http_request_duration_seconds_bucket{uri=~\"/api/.*\"}[5m]))",
+          "refId": "A",
+          "legendFormat": "95th percentile - {{uri}}"
+        }
+      ],
+      "yAxes": [
+        {
+          "label": "Seconds",
+          "min": 0
+        },
+        {
+          "show": false
+        }
+      ],
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      }
+    },
+    {
+      "id": 7,
+      "title": "WebSocket Connections",
+      "type": "graph",
+      "targets": [
+        {
+          "expr": "retrogame_websocket_connections",
+          "refId": "A",
+          "legendFormat": "Active WebSocket Connections"
+        }
+      ],
+      "yAxes": [
+        {
+          "label": "Connections",
+          "min": 0
+        },
+        {
+          "show": false
+        }
+      ],
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 17
+      }
+    },
+    {
+      "id": 8,
+      "title": "Emulator Sessions",
+      "type": "graph",
+      "targets": [
+        {
+          "expr": "retrogame_emulator_sessions",
+          "refId": "A",
+          "legendFormat": "Active Emulator Sessions"
+        }
+      ],
+      "yAxes": [
+        {
+          "label": "Sessions",
+          "min": 0
+        },
+        {
+          "show": false
+        }
+      ],
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 17
+      }
+    },
+    {
+      "id": 9,
+      "title": "Error Rate by Endpoint",
+      "type": "graph",
+      "targets": [
+        {
+          "expr": "rate(http_requests_total{status=~\"5..\"}[5m]) / rate(http_requests_total[5m]) * 100",
+          "refId": "A",
+          "legendFormat": "Error Rate - {{uri}}"
+        }
+      ],
+      "yAxes": [
+        {
+          "label": "Error Rate %",
+          "min": 0
+        },
+        {
+          "show": false
+        }
+      ],
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 26
+      }
+    }
+  ],
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "templating": {
+    "list": []
+  },
+  "version": 1
+}
+
+---
+
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "gnetId": null,
+  "graphTooltip": 0,
+  "id": null,
+  "title": "RetroGame Server - Security Dashboard",
+  "tags": ["retrogame", "security", "monitoring"],
+  "style": "dark",
+  "timezone": "",
+  "panels": [
+    {
+      "id": 1,
+      "title": "Failed Login Attempts (Last 24h)",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "increase(node_auth_failed_total[24h])",
+          "refId": "A",
+          "legendFormat": "Failed Logins"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 10
+              },
+              {
+                "color": "red",
+                "value": 50
+              }
+            ]
+          }
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "id": 2,
+      "title": "Banned IPs",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "fail2ban_banned_ips",
+          "refId": "A",
+          "legendFormat": "Banned IPs"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 5
+              },
+              {
+                "color": "red",
+                "value": 20
+              }
+            ]
+          }
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 6,
+        "y": 0
+      }
+    },
+    {
+      "id": 3,
+      "title": "Firewall Blocks",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "increase(node_netstat_dropped_total[24h])",
+          "refId": "A",
+          "legendFormat": "Dropped Packets"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 100
+              },
+              {
+                "color": "red",
+                "value": 1000
+              }
+            ]
+          }
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 12,
+        "y": 0
+      }
+    },
+    {
+      "id": 4,
+      "title": "Security Score",
+      "type": "gauge",
+      "targets": [
+        {
+          "expr": "100 - (increase(node_auth_failed_total[24h]) + fail2ban_banned_ips * 2)",
+          "refId": "A",
+          "legendFormat": "Security Score"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "max": 100,
+          "unit": "percent",
+          "thresholds": {
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 70
+              },
+              {
+                "color": "green",
+                "value": 90
+              }
+            ]
+          }
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 18,
+        "y": 0
+      }
+    },
+    {
+      "id": 5,
+      "title": "Authentication Events",
+      "type": "graph",
+      "targets": [
+        {
+          "expr": "rate(node_auth_success_total[5m])",
+          "refId": "A",
+          "legendFormat": "Successful Logins"
+        },
+        {
+          "expr": "rate(node_auth_failed_total[5m])",
+          "refId": "B",
+          "legendFormat": "Failed Logins"
+        }
+      ],
+      "yAxes": [
+        {
+          "label": "Events/sec",
+          "min": 0
+        },
+        {
+          "show": false
+        }
+      ],
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      }
+    },
+    {
+      "id": 6,
+      "title": "Fail2Ban Activity",
+      "type": "graph",
+      "targets": [
+        {
+          "expr": "rate(fail2ban_bans_total[5m])",
+          "refId": "A",
+          "legendFormat": "Bans/sec - {{jail}}"
+        },
+        {
+          "expr": "rate(fail2ban_unbans_total[5m])",
+          "refId": "B",
+          "legendFormat": "Unbans/sec - {{jail}}"
+        }
+      ],
+      "yAxes": [
+        {
+          "label": "Events/sec",
+          "min": 0
+        },
+        {
+          "show": false
+        }
+      ],
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      }
+    },
+    {
+      "id": 7,
+      "title": "Network Security Events",
+      "type": "graph",
+      "targets": [
+        {
+          "expr": "rate(node_netstat_dropped_total[5m])",
+          "refId": "A",
+          "legendFormat": "Dropped Packets/sec"
+        },
+        {
+          "expr": "rate(node_netstat_invalid_total[5m])",
+          "refId": "B",
+          "legendFormat": "Invalid Packets/sec"
+        }
+      ],
+      "yAxes": [
+        {
+          "label": "Packets/sec",
+          "min": 0
+        },
+        {
+          "show": false
+        }
+      ],
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 17
+      }
+    },
+    {
+      "id": 8,
+      "title": "Top Attack Sources",
+      "type": "table",
+      "targets": [
+        {
+          "expr": "topk(10, sum by (source_ip) (increase(node_auth_failed_total[24h])))",
+          "refId": "A",
+          "legendFormat": "{{source_ip}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "displayMode": "auto"
+          }
+        }
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 17
+      }
+    }
+  ],
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "templating": {
+    "list": []
+  },
+  "version": 1
+}

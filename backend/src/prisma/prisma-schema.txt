@@ -1,0 +1,299 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Platform/System definitions
+model Platform {
+  id              String   @id @default(cuid())
+  name            String   @unique
+  shortName       String   @unique
+  manufacturer    String
+  releaseYear     Int?
+  description     String?
+  icon            String?
+  supportedFormats String[] // JSON array of file extensions
+  emulatorCores   String[] // JSON array of available cores
+  biosRequired    Boolean  @default(false)
+  biosFiles       String[] // JSON array of required BIOS files
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  games Game[]
+  uploads Upload[]
+
+  @@map("platforms")
+}
+
+// ROM/Game information
+model Game {
+  id              String    @id @default(cuid())
+  title           String
+  originalTitle   String?   // Original language title
+  alternativeTitles String[] // Alternative names
+  
+  // File information
+  fileName        String
+  filePath        String    @unique
+  fileSize        BigInt
+  fileHash        String    @unique
+  fileExtension   String
+  
+  // Platform and region
+  platformId      String
+  platform        Platform  @relation(fields: [platformId], references: [id], onDelete: Cascade)
+  region          String?   // NTSC-U, PAL, NTSC-J, etc.
+  language        String?   // Language of the ROM
+  
+  // Game metadata
+  genre           String?
+  subGenre        String?
+  developer       String?
+  publisher       String?
+  releaseDate     DateTime?
+  releaseYear     Int?
+  
+  // Ratings and popularity
+  rating          Float?    // Average rating
+  ratingCount     Int       @default(0)
+  popularity      Float?    // Popularity score
+  
+  // Media assets
+  boxArtUrl       String?
+  screenshotUrls  String[]  // JSON array of screenshot URLs
+  videoUrl        String?   // Trailer or gameplay video
+  
+  // Technical information
+  romVersion      String?   // ROM version/revision
+  romChecksum     String?   // CRC32, MD5, or SHA1
+  headerInfo      Json?     // Platform-specific header data
+  
+  // Gameplay information
+  players         Int?      // Number of players
+  multiplayerType String?   // "cooperative", "competitive", etc.
+  inputMethods    String[]  // ["gamepad", "keyboard", "mouse"]
+  
+  // Emulation settings
+  compatibleCores String[]  // JSON array of compatible emulator cores
+  emulationNotes  String?   // Special settings or compatibility notes
+  
+  // Status and validation
+  isValidated     Boolean   @default(false)
+  validationError String?
+  needsBios       Boolean   @default(false)
+  requiredBios    String[]  // JSON array of required BIOS files
+  
+  // User interaction
+  playCount       Int       @default(0)
+  lastPlayed      DateTime?
+  isFavorite      Boolean   @default(false)
+  userRating      Float?
+  userNotes       String?
+  
+  // Archive handling
+  isArchive       Boolean   @default(false)
+  archiveContents String[]  // Files inside archive
+  extractedPath   String?   // Path to extracted files
+  
+  // Duplicate detection
+  duplicateOf     String?   // Reference to original game ID
+  duplicates      String[]  // Array of duplicate game IDs
+  
+  // Metadata sources
+  igdbId          String?   // IGDB database ID
+  thegamesdbId    String?   // TheGamesDB ID
+  screenscrapeId  String?   // ScreenScraper ID
+  mobygamesId     String?   // MobyGames ID
+  
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  // Relations
+  saveStates      SaveState[]
+  gameStats       GameStats[]
+
+  @@map("games")
+  @@index([title])
+  @@index([platformId])
+  @@index([genre])
+  @@index([releaseYear])
+  @@index([fileHash])
+  @@index([isValidated])
+}
+
+// Chunked upload tracking
+model Upload {
+  id              String        @id @default(cuid())
+  fileName        String
+  originalName    String
+  fileSize        BigInt
+  fileHash        String?
+  mimeType        String?
+  
+  // Upload progress
+  status          UploadStatus  @default(INITIATED)
+  totalChunks     Int
+  uploadedChunks  Int           @default(0)
+  chunkSize       Int
+  
+  // Platform detection
+  detectedPlatform String?
+  platformId      String?
+  platform        Platform?     @relation(fields: [platformId], references: [id])
+  
+  // Processing information
+  processingStarted DateTime?
+  processingCompleted DateTime?
+  processingError   String?
+  
+  // Paths
+  tempPath        String        // Temporary assembly path
+  finalPath       String?       // Final storage path
+  
+  // Validation
+  isValidated     Boolean       @default(false)
+  validationError String?
+  
+  // Metadata extraction
+  extractedMetadata Json?
+  
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  expiresAt       DateTime      // Auto-cleanup timestamp
+
+  chunks          UploadChunk[]
+
+  @@map("uploads")
+  @@index([status])
+  @@index([expiresAt])
+}
+
+// Individual chunk information
+model UploadChunk {
+  id          String   @id @default(cuid())
+  uploadId    String
+  upload      Upload   @relation(fields: [uploadId], references: [id], onDelete: Cascade)
+  
+  chunkIndex  Int
+  chunkSize   Int
+  chunkHash   String
+  chunkPath   String
+  
+  isUploaded  Boolean  @default(false)
+  uploadedAt  DateTime?
+  
+  createdAt   DateTime @default(now())
+
+  @@map("upload_chunks")
+  @@unique([uploadId, chunkIndex])
+}
+
+// Save states and saves
+model SaveState {
+  id          String   @id @default(cuid())
+  gameId      String
+  game        Game     @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  
+  name        String
+  description String?
+  filePath    String
+  fileSize    Int
+  
+  slotNumber  Int?     // Save slot number
+  isQuickSave Boolean  @default(false)
+  
+  createdAt   DateTime @default(now())
+
+  @@map("save_states")
+  @@index([gameId])
+}
+
+// Game statistics and analytics
+model GameStats {
+  id              String   @id @default(cuid())
+  gameId          String
+  game            Game     @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  
+  // Usage statistics
+  totalPlayTime   Int      @default(0) // in seconds
+  sessionCount    Int      @default(0)
+  averageSession  Int      @default(0) // in seconds
+  
+  // Performance metrics
+  averageFps      Float?
+  emulatorCore    String?
+  lastEmulatorCore String?
+  
+  // Date tracking
+  firstPlayed     DateTime?
+  lastPlayed      DateTime?
+  
+  // Monthly aggregates
+  year            Int
+  month           Int
+  playTimeMonth   Int      @default(0)
+  sessionsMonth   Int      @default(0)
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@map("game_stats")
+  @@unique([gameId, year, month])
+  @@index([gameId])
+  @@index([year, month])
+}
+
+// System configuration and settings
+model SystemConfig {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  value     Json
+  category  String   // "emulator", "ui", "storage", etc.
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("system_config")
+  @@index([category])
+}
+
+// BIOS file tracking
+model BiosFile {
+  id          String   @id @default(cuid())
+  fileName    String   @unique
+  filePath    String   @unique
+  fileSize    BigInt
+  fileHash    String   @unique
+  
+  platformId  String?
+  description String?
+  version     String?
+  region      String?
+  
+  isValidated Boolean  @default(false)
+  isRequired  Boolean  @default(false)
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("bios_files")
+  @@index([platformId])
+}
+
+// Enums
+enum UploadStatus {
+  INITIATED
+  UPLOADING
+  PROCESSING
+  COMPLETED
+  FAILED
+  CANCELLED
+  EXPIRED
+}

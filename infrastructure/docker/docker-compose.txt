@@ -1,0 +1,267 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: retro-game-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: retrogame
+      POSTGRES_USER: retrogame
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-retrogame123}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    networks:
+      - retro-game-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U retrogame -d retrogame"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: retro-game-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-redis123}
+    volumes:
+      - redis_data:/data
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    networks:
+      - retro-game-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Backend API Service
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    container_name: retro-game-backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      # Server Configuration
+      NODE_ENV: production
+      PORT: 3001
+      HOST: 0.0.0.0
+      
+      # Database Configuration
+      DATABASE_URL: postgresql://retrogame:${POSTGRES_PASSWORD:-retrogame123}@postgres:5432/retrogame
+      
+      # Redis Configuration
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-redis123}
+      REDIS_DB: 0
+      
+      # Storage Configuration
+      UPLOAD_DIR: /app/uploads
+      ROM_DIR: /app/roms
+      MEDIA_DIR: /app/media
+      BIOS_DIR: /app/bios
+      TEMP_DIR: /app/temp
+      
+      # Upload Configuration
+      MAX_FILE_SIZE: ${MAX_FILE_SIZE:-4294967296}
+      CHUNK_SIZE: ${CHUNK_SIZE:-1048576}
+      UPLOAD_TIMEOUT: ${UPLOAD_TIMEOUT:-3600}
+      
+      # Frontend Configuration
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
+      
+      # API Keys (optional)
+      IGDB_CLIENT_ID: ${IGDB_CLIENT_ID:-}
+      IGDB_CLIENT_SECRET: ${IGDB_CLIENT_SECRET:-}
+      THEGAMESDB_API_KEY: ${THEGAMESDB_API_KEY:-}
+      SCREENSCRAPER_USERNAME: ${SCREENSCRAPER_USERNAME:-}
+      SCREENSCRAPER_PASSWORD: ${SCREENSCRAPER_PASSWORD:-}
+      
+      # Security Configuration
+      JWT_SECRET: ${JWT_SECRET:-your-super-secret-jwt-key-change-in-production}
+      RATE_LIMIT_MAX: ${RATE_LIMIT_MAX:-1000}
+      RATE_LIMIT_WINDOW: ${RATE_LIMIT_WINDOW:-15}
+      
+      # Processing Configuration
+      ENABLE_VIRUS_SCAN: ${ENABLE_VIRUS_SCAN:-false}
+      
+      # Logging Configuration
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    
+    volumes:
+      # Persistent storage for ROMs and media
+      - rom_storage:/app/roms
+      - media_storage:/app/media
+      - bios_storage:/app/bios
+      - upload_storage:/app/uploads
+      - temp_storage:/app/temp
+      - log_storage:/app/logs
+      - report_storage:/app/reports
+    
+    ports:
+      - "${BACKEND_PORT:-3001}:3001"
+    
+    networks:
+      - retro-game-network
+    
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/api/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 40s
+      retries: 3
+    
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '1.0'
+        reservations:
+          memory: 512M
+          cpus: '0.5'
+
+  # Optional: Nginx reverse proxy for production
+  nginx:
+    image: nginx:alpine
+    container_name: retro-game-nginx
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "${NGINX_PORT:-80}:80"
+      - "${NGINX_SSL_PORT:-443}:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./ssl:/etc/nginx/ssl:ro
+      - log_storage:/var/log/nginx
+    networks:
+      - retro-game-network
+    profiles:
+      - production
+
+  # Optional: Database administration interface
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: retro-game-pgadmin
+    restart: unless-stopped
+    depends_on:
+      - postgres
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-admin@retrogame.local}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-admin123}
+      PGADMIN_CONFIG_SERVER_MODE: 'False'
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    ports:
+      - "${PGADMIN_PORT:-5050}:80"
+    networks:
+      - retro-game-network
+    profiles:
+      - development
+      - admin
+
+  # Optional: Redis administration interface
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: retro-game-redis-commander
+    restart: unless-stopped
+    depends_on:
+      - redis
+    environment:
+      REDIS_HOSTS: local:redis:6379:0:${REDIS_PASSWORD:-redis123}
+      HTTP_USER: ${REDIS_COMMANDER_USER:-admin}
+      HTTP_PASSWORD: ${REDIS_COMMANDER_PASSWORD:-admin123}
+    ports:
+      - "${REDIS_COMMANDER_PORT:-8081}:8081"
+    networks:
+      - retro-game-network
+    profiles:
+      - development
+      - admin
+
+  # Optional: Monitoring with Prometheus
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: retro-game-prometheus
+    restart: unless-stopped
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    networks:
+      - retro-game-network
+    profiles:
+      - monitoring
+
+  # Optional: Grafana for visualization
+  grafana:
+    image: grafana/grafana:latest
+    container_name: retro-game-grafana
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin123}
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    networks:
+      - retro-game-network
+    profiles:
+      - monitoring
+
+# Named volumes for persistent data
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  rom_storage:
+    driver: local
+  media_storage:
+    driver: local
+  bios_storage:
+    driver: local
+  upload_storage:
+    driver: local
+  temp_storage:
+    driver: local
+  log_storage:
+    driver: local
+  report_storage:
+    driver: local
+  pgadmin_data:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+
+# Network for service communication
+networks:
+  retro-game-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16

@@ -1,0 +1,587 @@
+# ==============================================================================
+# LOGSTASH CONFIGURATION
+# Log processing pipeline for RetroGame Server
+# ==============================================================================
+
+# monitoring/logstash/config/logstash.yml
+---
+http.host: "0.0.0.0"
+xpack.monitoring.elasticsearch.hosts: ["http://elasticsearch:9200"]
+
+# monitoring/logstash/pipeline/logstash.conf
+input {
+  # Caddy access logs
+  file {
+    path => "/var/log/caddy/access.log"
+    start_position => "beginning"
+    codec => json
+    type => "caddy-access"
+    tags => ["caddy", "access", "web"]
+  }
+  
+  # Application logs from Docker containers
+  gelf {
+    port => 12201
+    type => "docker"
+  }
+  
+  # System logs
+  file {
+    path => "/var/log/syslog"
+    start_position => "beginning"
+    type => "syslog"
+    tags => ["system", "syslog"]
+  }
+  
+  # Security logs
+  file {
+    path => "/var/log/auth.log"
+    start_position => "beginning"
+    type => "auth"
+    tags => ["security", "auth"]
+  }
+  
+  file {
+    path => "/var/log/fail2ban.log"
+    start_position => "beginning"
+    type => "fail2ban"
+    tags => ["security", "fail2ban"]
+  }
+  
+  file {
+    path => "/var/log/ufw.log"
+    start_position => "beginning"
+    type => "ufw"
+    tags => ["security", "firewall"]
+  }
+  
+  # Audit logs
+  file {
+    path => "/var/log/audit/audit.log"
+    start_position => "beginning"
+    type => "audit"
+    tags => ["security", "audit"]
+  }
+}
+
+filter {
+  # Common fields
+  mutate {
+    add_field => { "server" => "${HOSTNAME:unknown}" }
+    add_field => { "environment" => "production" }
+  }
+  
+  # Caddy access log processing
+  if [type] == "caddy-access" {
+    date {
+      match => [ "timestamp", "ISO8601" ]
+    }
+    
+    mutate {
+      rename => { "remote_addr" => "client_ip" }
+      rename => { "user_agent" => "user_agent" }
+      convert => { "status" => "integer" }
+      convert => { "size" => "integer" }
+      convert => { "duration" => "float" }
+    }
+    
+    # GeoIP enrichment
+    geoip {
+      source => "client_ip"
+      target => "geoip"
+    }
+    
+    # User agent parsing
+    useragent {
+      source => "user_agent"
+      target => "ua"
+    }
+    
+    # Response time categorization
+    if [duration] {
+      if [duration] < 0.1 {
+        mutate { add_field => { "response_time_category" => "fast" } }
+      } else if [duration] < 1.0 {
+        mutate { add_field => { "response_time_category" => "normal" } }
+      } else if [duration] < 5.0 {
+        mutate { add_field => { "response_time_category" => "slow" } }
+      } else {
+        mutate { add_field => { "response_time_category" => "very_slow" } }
+      }
+    }
+    
+    # Status code categorization
+    if [status] >= 200 and [status] < 300 {
+      mutate { add_field => { "status_category" => "success" } }
+    } else if [status] >= 300 and [status] < 400 {
+      mutate { add_field => { "status_category" => "redirect" } }
+    } else if [status] >= 400 and [status] < 500 {
+      mutate { add_field => { "status_category" => "client_error" } }
+    } else if [status] >= 500 {
+      mutate { add_field => { "status_category" => "server_error" } }
+    }
+  }
+  
+  # Auth log processing
+  if [type] == "auth" {
+    grok {
+      match => { 
+        "message" => "%{SYSLOGTIMESTAMP:timestamp} %{IPORHOST:host} %{PROG:program}(?:\[%{POSINT:pid}\])?: %{GREEDYDATA:auth_message}" 
+      }
+    }
+    
+    date {
+      match => [ "timestamp", "MMM  d HH:mm:ss", "MMM dd HH:mm:ss" ]
+    }
+    
+    # Detect failed login attempts
+    if [auth_message] =~ /Failed password/ {
+      mutate {
+        add_field => { "event_type" => "failed_login" }
+        add_field => { "severity" => "warning" }
+      }
+      
+      grok {
+        match => { 
+          "auth_message" => "Failed password for %{USERNAME:failed_user} from %{IP:source_ip}" 
+        }
+      }
+    }
+    
+    # Detect successful logins
+    if [auth_message] =~ /Accepted password/ {
+      mutate {
+        add_field => { "event_type" => "successful_login" }
+        add_field => { "severity" => "info" }
+      }
+      
+      grok {
+        match => { 
+          "auth_message" => "Accepted password for %{USERNAME:login_user} from %{IP:source_ip}" 
+        }
+      }
+    }
+    
+    # Detect sudo usage
+    if [program] == "sudo" {
+      mutate {
+        add_field => { "event_type" => "sudo_usage" }
+        add_field => { "severity" => "info" }
+      }
+    }
+  }
+  
+  # Fail2ban log processing
+  if [type] == "fail2ban" {
+    grok {
+      match => {
+        "message" => "%{TIMESTAMP_ISO8601:timestamp} %{LOGLEVEL:loglevel} \[%{NOTSPACE:jail}\] %{GREEDYDATA:fail2ban_message}"
+      }
+    }
+    
+    date {
+      match => [ "timestamp", "ISO8601" ]
+    }
+    
+    if [fail2ban_message] =~ /Ban/ {
+      mutate {
+        add_field => { "event_type" => "ip_banned" }
+        add_field => { "severity" => "warning" }
+      }
+      
+      grok {
+        match => { 
+          "fail2ban_message" => "Ban %{IP:banned_ip}" 
+        }
+      }
+    }
+    
+    if [fail2ban_message] =~ /Unban/ {
+      mutate {
+        add_field => { "event_type" => "ip_unbanned" }
+        add_field => { "severity" => "info" }
+      }
+      
+      grok {
+        match => { 
+          "fail2ban_message" => "Unban %{IP:unbanned_ip}" 
+        }
+      }
+    }
+  }
+  
+  # UFW firewall log processing
+  if [type] == "ufw" {
+    grok {
+      match => {
+        "message" => "%{SYSLOGTIMESTAMP:timestamp} %{HOSTNAME:host} kernel: \[%{NUMBER:kernel_timestamp}\] \[UFW %{WORD:ufw_action}\] IN=%{WORD:in_interface} OUT=%{WORD:out_interface} MAC=%{COMMONMAC:mac} SRC=%{IP:source_ip} DST=%{IP:dest_ip} LEN=%{NUMBER:packet_length} TOS=%{BASE16NUM:tos} PREC=%{BASE16NUM:prec} TTL=%{NUMBER:ttl} ID=%{NUMBER:id} PROTO=%{WORD:protocol} SPT=%{NUMBER:source_port} DPT=%{NUMBER:dest_port}"
+      }
+    }
+    
+    date {
+      match => [ "timestamp", "MMM  d HH:mm:ss", "MMM dd HH:mm:ss" ]
+    }
+    
+    mutate {
+      add_field => { "event_type" => "firewall_block" }
+      add_field => { "severity" => "info" }
+      convert => { "source_port" => "integer" }
+      convert => { "dest_port" => "integer" }
+    }
+  }
+  
+  # Docker container logs
+  if [type] == "docker" {
+    # Parse container name and extract service
+    if [container_name] {
+      grok {
+        match => { "container_name" => "retro-game-%{WORD:service_name}" }
+      }
+    }
+    
+    # Parse JSON logs from applications
+    if [message] =~ /^\{/ {
+      json {
+        source => "message"
+      }
+    }
+  }
+  
+  # Remove sensitive information
+  mutate {
+    remove_field => [ "password", "token", "secret", "key" ]
+  }
+}
+
+output {
+  elasticsearch {
+    hosts => ["elasticsearch:9200"]
+    index => "retrogame-logs-%{+YYYY.MM.dd}"
+    
+    # Use document type based on log type
+    template => "/usr/share/logstash/config/elasticsearch-template.json"
+    template_name => "retrogame-logs"
+    template_overwrite => true
+  }
+  
+  # Debug output (remove in production)
+  # stdout { codec => rubydebug }
+}
+
+---
+# ==============================================================================
+# ELASTICSEARCH TEMPLATE
+# Index template for RetroGame logs
+# ==============================================================================
+
+# monitoring/logstash/config/elasticsearch-template.json
+{
+  "index_patterns": ["retrogame-logs-*"],
+  "settings": {
+    "number_of_shards": 1,
+    "number_of_replicas": 1,
+    "index.refresh_interval": "30s",
+    "index.translog.flush_threshold_size": "1gb",
+    "index.codec": "best_compression"
+  },
+  "mappings": {
+    "properties": {
+      "@timestamp": {
+        "type": "date"
+      },
+      "timestamp": {
+        "type": "date"
+      },
+      "server": {
+        "type": "keyword"
+      },
+      "environment": {
+        "type": "keyword"
+      },
+      "type": {
+        "type": "keyword"
+      },
+      "tags": {
+        "type": "keyword"
+      },
+      "event_type": {
+        "type": "keyword"
+      },
+      "severity": {
+        "type": "keyword"
+      },
+      "client_ip": {
+        "type": "ip"
+      },
+      "source_ip": {
+        "type": "ip"
+      },
+      "dest_ip": {
+        "type": "ip"
+      },
+      "status": {
+        "type": "integer"
+      },
+      "duration": {
+        "type": "float"
+      },
+      "response_time_category": {
+        "type": "keyword"
+      },
+      "status_category": {
+        "type": "keyword"
+      },
+      "method": {
+        "type": "keyword"
+      },
+      "uri": {
+        "type": "text",
+        "fields": {
+          "keyword": {
+            "type": "keyword",
+            "ignore_above": 256
+          }
+        }
+      },
+      "user_agent": {
+        "type": "text",
+        "fields": {
+          "keyword": {
+            "type": "keyword",
+            "ignore_above": 512
+          }
+        }
+      },
+      "geoip": {
+        "properties": {
+          "location": {
+            "type": "geo_point"
+          },
+          "country_name": {
+            "type": "keyword"
+          },
+          "city_name": {
+            "type": "keyword"
+          },
+          "region_name": {
+            "type": "keyword"
+          }
+        }
+      },
+      "ua": {
+        "properties": {
+          "name": {
+            "type": "keyword"
+          },
+          "os": {
+            "type": "keyword"
+          },
+          "device": {
+            "type": "keyword"
+          }
+        }
+      },
+      "container_name": {
+        "type": "keyword"
+      },
+      "service_name": {
+        "type": "keyword"
+      },
+      "message": {
+        "type": "text"
+      }
+    }
+  }
+}
+
+---
+# ==============================================================================
+# KIBANA DASHBOARDS AND VISUALIZATIONS
+# Pre-configured dashboards for monitoring
+# ==============================================================================
+
+# monitoring/kibana/dashboards/retrogame-overview.json
+{
+  "version": "8.11.0",
+  "dashboards": [
+    {
+      "id": "retrogame-overview",
+      "title": "RetroGame Server Overview",
+      "description": "Main dashboard for RetroGame server monitoring",
+      "panelsJSON": "[{\"id\":\"1\",\"type\":\"line\",\"gridData\":{\"x\":0,\"y\":0,\"w\":24,\"h\":15},\"panelIndex\":\"1\",\"title\":\"Request Rate\",\"query\":{\"match_all\":{}},\"filters\":[{\"match\":{\"type\":\"caddy-access\"}}]},{\"id\":\"2\",\"type\":\"pie\",\"gridData\":{\"x\":24,\"y\":0,\"w\":24,\"h\":15},\"panelIndex\":\"2\",\"title\":\"Response Status Codes\",\"query\":{\"match_all\":{}},\"filters\":[{\"match\":{\"type\":\"caddy-access\"}}]},{\"id\":\"3\",\"type\":\"histogram\",\"gridData\":{\"x\":0,\"y\":15,\"w\":48,\"h\":15},\"panelIndex\":\"3\",\"title\":\"Response Time Distribution\",\"query\":{\"match_all\":{}},\"filters\":[{\"match\":{\"type\":\"caddy-access\"}}]},{\"id\":\"4\",\"type\":\"data_table\",\"gridData\":{\"x\":0,\"y\":30,\"w\":48,\"h\":15},\"panelIndex\":\"4\",\"title\":\"Recent Error Logs\",\"query\":{\"bool\":{\"should\":[{\"match\":{\"severity\":\"error\"}},{\"match\":{\"status_category\":\"server_error\"}}]}}}]",
+      "kibanaSavedObjectMeta": {
+        "searchSourceJSON": "{\"query\":{\"match_all\":{}},\"filter\":[]}"
+      }
+    },
+    {
+      "id": "retrogame-security",
+      "title": "Security Dashboard",
+      "description": "Security monitoring and threat detection",
+      "panelsJSON": "[{\"id\":\"1\",\"type\":\"line\",\"gridData\":{\"x\":0,\"y\":0,\"w\":24,\"h\":15},\"panelIndex\":\"1\",\"title\":\"Failed Login Attempts\",\"query\":{\"match\":{\"event_type\":\"failed_login\"}}},{\"id\":\"2\",\"type\":\"data_table\",\"gridData\":{\"x\":24,\"y\":0,\"w\":24,\"h\":15},\"panelIndex\":\"2\",\"title\":\"Banned IPs (Fail2ban)\",\"query\":{\"match\":{\"event_type\":\"ip_banned\"}}},{\"id\":\"3\",\"type\":\"map\",\"gridData\":{\"x\":0,\"y\":15,\"w\":48,\"h\":20},\"panelIndex\":\"3\",\"title\":\"Geographic Distribution of Attacks\",\"query\":{\"bool\":{\"should\":[{\"match\":{\"event_type\":\"failed_login\"}},{\"match\":{\"event_type\":\"firewall_block\"}}]}}},{\"id\":\"4\",\"type\":\"metric\",\"gridData\":{\"x\":0,\"y\":35,\"w\":12,\"h\":10},\"panelIndex\":\"4\",\"title\":\"Security Events (24h)\",\"query\":{\"bool\":{\"should\":[{\"match\":{\"event_type\":\"failed_login\"}},{\"match\":{\"event_type\":\"ip_banned\"}},{\"match\":{\"event_type\":\"firewall_block\"}}],\"filter\":[{\"range\":{\"@timestamp\":{\"gte\":\"now-24h\"}}}]}}}]"
+    },
+    {
+      "id": "retrogame-performance",
+      "title": "Performance Dashboard",
+      "description": "Application performance monitoring",
+      "panelsJSON": "[{\"id\":\"1\",\"type\":\"line\",\"gridData\":{\"x\":0,\"y\":0,\"w\":24,\"h\":15},\"panelIndex\":\"1\",\"title\":\"Average Response Time\",\"query\":{\"match\":{\"type\":\"caddy-access\"}}},{\"id\":\"2\",\"type\":\"histogram\",\"gridData\":{\"x\":24,\"y\":0,\"w\":24,\"h\":15},\"panelIndex\":\"2\",\"title\":\"Request Volume by Hour\",\"query\":{\"match\":{\"type\":\"caddy-access\"}}},{\"id\":\"3\",\"type\":\"pie\",\"gridData\":{\"x\":0,\"y\":15,\"w\":24,\"h\":15},\"panelIndex\":\"3\",\"title\":\"Top User Agents\",\"query\":{\"match\":{\"type\":\"caddy-access\"}}},{\"id\":\"4\",\"type\":\"data_table\",\"gridData\":{\"x\":24,\"y\":15,\"w\":24,\"h\":15},\"panelIndex\":\"4\",\"title\":\"Slowest Endpoints\",\"query\":{\"match\":{\"type\":\"caddy-access\"}}}]"
+    }
+  ],
+  "index_patterns": [
+    {
+      "id": "retrogame-logs-*",
+      "title": "retrogame-logs-*",
+      "timeFieldName": "@timestamp"
+    }
+  ],
+  "visualizations": [
+    {
+      "id": "request-rate-vis",
+      "title": "Request Rate",
+      "type": "line",
+      "kibanaSavedObjectMeta": {
+        "searchSourceJSON": "{\"index\":\"retrogame-logs-*\",\"query\":{\"match\":{\"type\":\"caddy-access\"}},\"filter\":[]}"
+      }
+    },
+    {
+      "id": "status-codes-vis",
+      "title": "Response Status Codes",
+      "type": "pie",
+      "kibanaSavedObjectMeta": {
+        "searchSourceJSON": "{\"index\":\"retrogame-logs-*\",\"query\":{\"match\":{\"type\":\"caddy-access\"}},\"filter\":[]}"
+      }
+    },
+    {
+      "id": "response-time-vis",
+      "title": "Response Time Distribution",
+      "type": "histogram",
+      "kibanaSavedObjectMeta": {
+        "searchSourceJSON": "{\"index\":\"retrogame-logs-*\",\"query\":{\"match\":{\"type\":\"caddy-access\"}},\"filter\":[]}"
+      }
+    }
+  ],
+  "searches": [
+    {
+      "id": "error-logs-search",
+      "title": "Error Logs",
+      "description": "Search for error logs across all services",
+      "kibanaSavedObjectMeta": {
+        "searchSourceJSON": "{\"index\":\"retrogame-logs-*\",\"query\":{\"bool\":{\"should\":[{\"match\":{\"severity\":\"error\"}},{\"match\":{\"status_category\":\"server_error\"}}]}},\"filter\":[]}"
+      }
+    },
+    {
+      "id": "security-events-search",
+      "title": "Security Events",
+      "description": "Search for security-related events",
+      "kibanaSavedObjectMeta": {
+        "searchSourceJSON": "{\"index\":\"retrogame-logs-*\",\"query\":{\"bool\":{\"should\":[{\"match\":{\"event_type\":\"failed_login\"}},{\"match\":{\"event_type\":\"ip_banned\"}},{\"match\":{\"event_type\":\"firewall_block\"}}]}},\"filter\":[]}"
+      }
+    }
+  ]
+}
+
+---
+# ==============================================================================
+# ALERTING CONFIGURATION
+# ElastAlert rules for log-based alerting
+# ==============================================================================
+
+# monitoring/elastalert/rules/security-alerts.yml
+name: RetroGame Security Alerts
+type: frequency
+index: retrogame-logs-*
+num_events: 5
+timeframe:
+  minutes: 10
+
+filter:
+- bool:
+    should:
+    - match:
+        event_type: "failed_login"
+    - match:
+        event_type: "ip_banned"
+    - match:
+        severity: "error"
+
+alert:
+- "slack"
+
+slack:
+webhook_url: "YOUR_SLACK_WEBHOOK_URL"
+slack_channel_override: "#security-alerts"
+slack_username_override: "ElastAlert"
+slack_msg_color: "danger"
+
+alert_text: |
+  Security Alert: {0} events detected in the last 10 minutes
+  
+  Server: {1}
+  Time: {2}
+  
+  Recent events:
+  {3}
+
+alert_text_args:
+  - num_matches
+  - server
+  - "@timestamp"
+  - message
+
+include:
+  - "@timestamp"
+  - "server"
+  - "event_type"
+  - "severity"
+  - "message"
+  - "source_ip"
+
+---
+# monitoring/elastalert/rules/performance-alerts.yml
+name: RetroGame Performance Alerts
+type: metric_aggregation
+index: retrogame-logs-*
+metric_agg_key: duration
+metric_agg_type: avg
+doc_type: caddy-access
+
+buffer_time:
+  minutes: 5
+
+filter:
+- bool:
+    must:
+    - match:
+        type: "caddy-access"
+    - range:
+        duration:
+          gte: 5.0
+
+max_threshold: 10.0
+min_threshold: 0
+
+alert:
+- "email"
+- "slack"
+
+email:
+- "admin@yourdomain.com"
+
+slack:
+webhook_url: "YOUR_SLACK_WEBHOOK_URL"
+slack_channel_override: "#performance-alerts"
+slack_username_override: "ElastAlert"
+slack_msg_color: "warning"
+
+alert_text: |
+  Performance Alert: Average response time is {0} seconds
+  
+  This exceeds the threshold of 5 seconds.
+  
+  Server: {1}
+  Time Range: {2} to {3}
+
+alert_text_args:
+  - metric_duration_avg
+  - server
+  - starttime
+  - endtime
